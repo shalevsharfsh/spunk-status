@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Spunky Pipelines</title>
+<style>
+  :root {
+    color-scheme: light;
+    --page:           #f9f9f7;
+    --surface-1:      #fcfcfb;
+    --text-primary:   #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted:     #898781;
+    --hairline:       #e1e0d9;
+    --border:         rgba(11,11,11,0.10);
+    --status-good:      #0ca30c;
+    --status-warning:   #fab219;
+    --status-serious:   #ec835a;
+    --status-critical:  #d03b3b;
+    --status-neutral:   #898781;
+    --running:          #2a78d6;
+    --good-text:        #006300;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      color-scheme: dark;
+      --page:           #0d0d0d;
+      --surface-1:      #1a1a19;
+      --text-primary:   #ffffff;
+      --text-secondary: #c3c2b7;
+      --text-muted:     #898781;
+      --hairline:       #2c2c2a;
+      --border:         rgba(255,255,255,0.10);
+      --running:        #3987e5;
+      --good-text:      #0ca30c;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--page);
+    color: var(--text-primary);
+    font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  header {
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+    padding: 16px 24px;
+    border-bottom: 1px solid var(--hairline);
+  }
+  header h1 { font-size: 16px; margin: 0; font-weight: 650; }
+  header .spacer { flex: 1; }
+  header .meta { color: var(--text-muted); font-size: 12px; }
+  button, input[type="password"] {
+    font: inherit;
+    color: var(--text-primary);
+    background: var(--surface-1);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 6px 12px;
+  }
+  button { cursor: pointer; }
+  button:hover { border-color: var(--text-muted); }
+  main { padding: 20px 24px 48px; max-width: 1200px; margin: 0 auto; }
+  .repo-group { margin-bottom: 28px; }
+  .repo-group > h2 {
+    font-size: 12px; font-weight: 650; letter-spacing: .04em;
+    text-transform: uppercase; color: var(--text-muted);
+    margin: 0 0 10px;
+  }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    gap: 12px;
+  }
+  .tile {
+    background: var(--surface-1);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 14px 16px;
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .tile .row1 { display: flex; align-items: center; gap: 8px; }
+  .tile .name { font-weight: 650; flex: 1; min-width: 0; }
+  .tile .name a { color: inherit; text-decoration: none; }
+  .tile .name a:hover { text-decoration: underline; }
+  .badge {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-size: 12px; font-weight: 650; white-space: nowrap;
+  }
+  .badge .dot {
+    width: 10px; height: 10px; border-radius: 50%;
+    display: inline-flex; align-items: center; justify-content: center;
+    flex: none;
+  }
+  .badge.running .dot { animation: pulse 1.2s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: .35; } }
+  .tile .row2 {
+    display: flex; gap: 10px; flex-wrap: wrap;
+    color: var(--text-secondary); font-size: 12px;
+  }
+  .tile .row2 .branch {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    background: var(--page); border: 1px solid var(--hairline);
+    border-radius: 6px; padding: 0 6px;
+  }
+  .history { display: flex; gap: 3px; margin-top: 2px; }
+  .history a {
+    width: 16px; height: 16px; border-radius: 4px;
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 10px; font-weight: 700; line-height: 1;
+    color: #fff; text-decoration: none;
+  }
+  .empty { color: var(--text-muted); font-size: 13px; }
+  .setup {
+    max-width: 560px; margin: 60px auto; background: var(--surface-1);
+    border: 1px solid var(--border); border-radius: 12px; padding: 24px;
+  }
+  .setup h2 { margin-top: 0; font-size: 16px; }
+  .setup ol { padding-left: 20px; color: var(--text-secondary); }
+  .setup form { display: flex; gap: 8px; margin-top: 12px; }
+  .setup input { flex: 1; }
+  .error-banner {
+    background: var(--surface-1); border: 1px solid var(--status-critical);
+    border-radius: 8px; padding: 10px 14px; margin-bottom: 16px;
+    color: var(--text-primary); font-size: 13px;
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>Spunky Pipelines</h1>
+  <span class="meta" id="last-updated"></span>
+  <span class="spacer"></span>
+  <span class="meta" id="rate-limit"></span>
+  <button id="refresh-btn" type="button">Refresh</button>
+  <button id="token-btn" type="button" title="Replace the stored GitHub token">Token…</button>
+</header>
+<main id="main"></main>
+
+<script>
+'use strict';
+
+const OWNER = 'shalevsharfsh';
+
+// The Spunk ci.yml (PR pipeline) is deliberately excluded — uncomment to add it back.
+const WORKFLOWS = [
+  { repo: 'Spunk',         file: 'e2e-ios-smoke.yml',      label: 'E2E iOS smoke' },
+  { repo: 'Spunk',         file: 'e2e-ios-deep.yml',       label: 'E2E iOS deep' },
+  { repo: 'Spunk',         file: 'e2e-android-smoke.yml',  label: 'E2E Android smoke' },
+  { repo: 'Spunk',         file: 'release-mobile.yml',     label: 'Release mobile' },
+  { repo: 'Spunk',         file: 'release-train-prep.yml', label: 'Release train prep' },
+  { repo: 'Spunk',         file: 'release-train.yml',      label: 'Release train' },
+  // { repo: 'Spunk',      file: 'ci.yml',                 label: 'Mobile CI' },
+  { repo: 'spunky-web',    file: 'deploy-web.yml',         label: 'Deploy web' },
+  { repo: 'spunk-backend', file: 'ci.yml',                 label: 'CI — main pushes + hourly nag' },
+  { repo: 'spunk-backend', file: 'release-prod.yml',       label: 'Release prod' },
+];
+
+const HISTORY_LEN = 10;
+const AUTO_REFRESH_MS = 60_000;
+const TOKEN_KEY = 'spunk-pipelines-token';
+
+// status → {cssColor, glyph, label}; glyph+label always accompany color.
+function statusOf(run) {
+  if (!run) return { color: 'var(--status-neutral)', glyph: '–', label: 'No runs yet' };
+  if (run.status !== 'completed') {
+    return { color: 'var(--running)', glyph: '●', label: run.status === 'queued' ? 'Queued' : 'Running', running: true };
+  }
+  switch (run.conclusion) {
+    case 'success':         return { color: 'var(--status-good)',     glyph: '✓', label: 'Passed' };
+    case 'failure':
+    case 'timed_out':
+    case 'startup_failure': return { color: 'var(--status-critical)', glyph: '✕', label: run.conclusion === 'failure' ? 'Failed' : run.conclusion.replace('_', ' ') };
+    case 'action_required': return { color: 'var(--status-warning)',  glyph: '!', label: 'Action required' };
+    case 'cancelled':       return { color: 'var(--status-neutral)',  glyph: '⊘', label: 'Cancelled' };
+    case 'skipped':
+    case 'neutral':         return { color: 'var(--status-neutral)',  glyph: '–', label: 'Skipped' };
+    default:                return { color: 'var(--status-serious)',  glyph: '?', label: run.conclusion || 'Unknown' };
+  }
+}
+
+function relTime(iso) {
+  const s = (Date.now() - new Date(iso).getTime()) / 1000;
+  if (s < 60) return 'just now';
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  return `${Math.floor(s / 86400)}d ago`;
+}
+
+function duration(run) {
+  if (!run.run_started_at) return '';
+  const end = run.status === 'completed' ? new Date(run.updated_at) : new Date();
+  const s = Math.max(0, Math.round((end - new Date(run.run_started_at)) / 1000));
+  return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`;
+}
+
+function getToken() { return localStorage.getItem(TOKEN_KEY) || ''; }
+
+function saveToken(t) {
+  if (t) localStorage.setItem(TOKEN_KEY, t.trim());
+  else localStorage.removeItem(TOKEN_KEY);
+}
+
+// Allow ?token=… for first-time setup, then scrub it from the URL/history.
+(function bootstrapToken() {
+  const url = new URL(location.href);
+  const t = url.searchParams.get('token');
+  if (t) {
+    saveToken(t);
+    url.searchParams.delete('token');
+    history.replaceState(null, '', url.pathname + (url.search || ''));
+  }
+})();
+
+async function fetchRuns(wf, token) {
+  const url = `https://api.github.com/repos/${OWNER}/${wf.repo}/actions/workflows/${wf.file}/runs` +
+              `?per_page=${HISTORY_LEN}&exclude_pull_requests=true`;
+  const res = await fetch(url, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28',
+    },
+  });
+  const remaining = res.headers.get('x-ratelimit-remaining');
+  if (remaining !== null) {
+    document.getElementById('rate-limit').textContent = `API budget: ${remaining} left`;
+  }
+  if (res.status === 401) throw Object.assign(new Error('unauthorized'), { auth: true });
+  if (res.status === 404) return { notFound: true, runs: [] };
+  if (!res.ok) throw new Error(`${wf.repo}/${wf.file}: HTTP ${res.status}`);
+  const body = await res.json();
+  return { runs: body.workflow_runs || [] };
+}
+
+function el(tag, cls, text) {
+  const n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (text !== undefined) n.textContent = text;
+  return n;
+}
+
+function renderTile(wf, result) {
+  const tile = el('div', 'tile');
+  const latest = result.runs[0];
+  const st = statusOf(latest);
+
+  const row1 = el('div', 'row1');
+  const badge = el('span', 'badge' + (st.running ? ' running' : ''));
+  const dot = el('span', 'dot');
+  dot.style.background = st.color;
+  const glyph = el('span', '', st.glyph);
+  glyph.style.color = st.color;
+  glyph.setAttribute('aria-hidden', 'true');
+  badge.append(dot, glyph, el('span', '', st.label));
+
+  const name = el('span', 'name');
+  const link = el('a', '', wf.label);
+  link.href = latest ? latest.html_url
+    : `https://github.com/${OWNER}/${wf.repo}/actions/workflows/${wf.file}`;
+  link.target = '_blank';
+  link.rel = 'noopener';
+  name.append(link);
+  row1.append(name, badge);
+  tile.append(row1);
+
+  if (result.notFound) {
+    tile.append(el('div', 'empty', 'Workflow not found — check the file name in WORKFLOWS.'));
+    return tile;
+  }
+  if (!latest) {
+    tile.append(el('div', 'empty', 'No non-PR runs recorded yet.'));
+    return tile;
+  }
+
+  const row2 = el('div', 'row2');
+  row2.append(el('span', 'branch', latest.head_branch || latest.event));
+  row2.append(el('span', '', latest.event));
+  const d = duration(latest);
+  if (d) row2.append(el('span', '', d));
+  row2.append(el('span', '', relTime(latest.run_started_at || latest.updated_at)));
+  tile.append(row2);
+
+  const hist = el('div', 'history');
+  hist.setAttribute('aria-label', `Last ${result.runs.length} runs, newest first`);
+  for (const run of result.runs) {
+    const s = statusOf(run);
+    const cell = el('a', '', s.glyph);
+    cell.style.background = s.color;
+    cell.href = run.html_url;
+    cell.target = '_blank';
+    cell.rel = 'noopener';
+    cell.title = `${s.label} · ${run.head_branch || run.event} · ${relTime(run.run_started_at || run.updated_at)}`;
+    hist.append(cell);
+  }
+  tile.append(hist);
+  return tile;
+}
+
+function renderSetup(msg) {
+  const main = document.getElementById('main');
+  main.replaceChildren();
+  const box = el('div', 'setup');
+  box.append(el('h2', '', 'Connect to GitHub'));
+  if (msg) {
+    const err = el('div', 'error-banner', msg);
+    box.append(err);
+  }
+  const ol = el('ol');
+  const li1 = el('li');
+  const a = el('a', '', 'Create a fine-grained personal access token');
+  a.href = 'https://github.com/settings/personal-access-tokens/new';
+  a.target = '_blank';
+  a.rel = 'noopener';
+  li1.append(a, document.createTextNode(' scoped to Spunk, spunky-web and spunk-backend.'));
+  ol.append(li1);
+  ol.append(el('li', '', 'Grant a single repository permission: Actions — Read-only.'));
+  ol.append(el('li', '', 'Paste it below. It is stored only in this browser (localStorage), never sent anywhere but api.github.com.'));
+  box.append(ol);
+  const form = el('form');
+  const input = el('input');
+  input.type = 'password';
+  input.placeholder = 'github_pat_…';
+  input.autocomplete = 'off';
+  const btn = el('button', '', 'Save');
+  btn.type = 'submit';
+  form.append(input, btn);
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    if (!input.value.trim()) return;
+    saveToken(input.value);
+    load();
+  });
+  box.append(form);
+  main.append(box);
+}
+
+let refreshTimer = null;
+
+async function load() {
+  const token = getToken();
+  if (!token) { renderSetup(); return; }
+
+  const btn = document.getElementById('refresh-btn');
+  btn.disabled = true;
+  try {
+    const results = await Promise.all(WORKFLOWS.map((wf) =>
+      fetchRuns(wf, token).catch((err) => {
+        if (err.auth) throw err;
+        return { error: err.message, runs: [] };
+      })
+    ));
+
+    const main = document.getElementById('main');
+    main.replaceChildren();
+
+    const failed = results.find((r) => r.error);
+    if (failed) main.append(el('div', 'error-banner', `Some workflows failed to load: ${failed.error}`));
+
+    const byRepo = new Map();
+    WORKFLOWS.forEach((wf, i) => {
+      if (!byRepo.has(wf.repo)) byRepo.set(wf.repo, []);
+      byRepo.get(wf.repo).push([wf, results[i]]);
+    });
+    for (const [repo, items] of byRepo) {
+      const group = el('section', 'repo-group');
+      group.append(el('h2', '', repo));
+      const grid = el('div', 'grid');
+      for (const [wf, result] of items) grid.append(renderTile(wf, result));
+      group.append(grid);
+      main.append(group);
+    }
+    document.getElementById('last-updated').textContent =
+      `Updated ${new Date().toLocaleTimeString()} · PR-triggered runs excluded`;
+  } catch (err) {
+    if (err.auth) {
+      saveToken('');
+      renderSetup('GitHub rejected the token (401). Paste a valid fine-grained PAT.');
+    } else {
+      document.getElementById('main').prepend(el('div', 'error-banner', `Load failed: ${err.message}`));
+    }
+  } finally {
+    btn.disabled = false;
+    clearTimeout(refreshTimer);
+    refreshTimer = setTimeout(load, AUTO_REFRESH_MS);
+  }
+}
+
+document.getElementById('refresh-btn').addEventListener('click', load);
+document.getElementById('token-btn').addEventListener('click', () => {
+  saveToken('');
+  renderSetup();
+});
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') load();
+});
+load();
+</script>
+</body>
+</html>
