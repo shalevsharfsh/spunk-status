@@ -145,7 +145,6 @@ const OWNER = 'spunky-app';
 
 // The Spunk ci.yml (PR pipeline) is deliberately excluded — uncomment to add it back.
 const WORKFLOWS = [
-  { repo: 'Spunk',         file: 'e2e-ios-smoke.yml',      label: 'E2E iOS smoke' },
   { repo: 'Spunk',         file: 'e2e-ios-deep.yml',       label: 'E2E iOS deep' },
   { repo: 'Spunk',         file: 'e2e-android-smoke.yml',  label: 'E2E Android smoke' },
   { repo: 'Spunk',         file: 'release-mobile.yml',     label: 'Release mobile' },
@@ -156,6 +155,10 @@ const WORKFLOWS = [
   { repo: 'spunk-backend', file: 'ci.yml',                 label: 'CI — main pushes + hourly nag' },
   { repo: 'spunk-backend', file: 'release-prod.yml',       label: 'Release prod' },
 ];
+
+// Repos with self-hosted runners. Listing them needs the token to also have
+// the "Administration: Read-only" repository permission (still read-only).
+const RUNNER_REPOS = ['Spunk', 'spunk-backend'];
 
 const HISTORY_LEN = 10;
 const AUTO_REFRESH_MS = 60_000;
@@ -232,6 +235,77 @@ async function fetchRuns(wf, token) {
   if (!res.ok) throw new Error(`${wf.repo}/${wf.file}: HTTP ${res.status}`);
   const body = await res.json();
   return { runs: body.workflow_runs || [] };
+}
+
+async function fetchRunners(repo, token) {
+  const res = await fetch(`https://api.github.com/repos/${OWNER}/${repo}/actions/runners?per_page=20`, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28',
+    },
+  });
+  if (res.status === 401) throw Object.assign(new Error('unauthorized'), { auth: true });
+  if (res.status === 403 || res.status === 404) return { repo, noAccess: true, runners: [] };
+  if (!res.ok) return { repo, error: `HTTP ${res.status}`, runners: [] };
+  return { repo, runners: (await res.json()).runners || [] };
+}
+
+function runnerStatus(runner) {
+  if (runner.status !== 'online') return { color: 'var(--status-critical)', glyph: '✕', label: 'Offline' };
+  if (runner.busy) return { color: 'var(--running)', glyph: '●', label: 'Busy', running: true };
+  return { color: 'var(--status-good)', glyph: '✓', label: 'Online' };
+}
+
+function renderRunnerTile(repo, runner) {
+  const tile = el('div', 'tile');
+  const st = runnerStatus(runner);
+  const row1 = el('div', 'row1');
+  const name = el('span', 'name', runner.name);
+  const badge = el('span', 'badge' + (st.running ? ' running' : ''));
+  const dot = el('span', 'dot');
+  dot.style.background = st.color;
+  const glyph = el('span', '', st.glyph);
+  glyph.style.color = st.color;
+  glyph.setAttribute('aria-hidden', 'true');
+  badge.append(dot, glyph, el('span', '', st.label));
+  row1.append(name, badge);
+  tile.append(row1);
+  const row2 = el('div', 'row2');
+  row2.append(el('span', 'branch', repo));
+  row2.append(el('span', '', runner.labels.map((l) => l.name).filter((n) => n !== 'self-hosted').join(' · ')));
+  tile.append(row2);
+  return tile;
+}
+
+function renderRunnersSection(results) {
+  const group = el('section', 'repo-group');
+  group.append(el('h2', '', 'Self-hosted runners'));
+  const grid = el('div', 'grid');
+  for (const r of results) {
+    if (r.noAccess) {
+      const tile = el('div', 'tile');
+      tile.append(el('div', 'row1')).append(el('span', 'name', r.repo));
+      tile.append(el('div', 'empty',
+        'Token can’t list runners — add the “Administration: Read-only” repository permission to your PAT.'));
+      grid.append(tile);
+      continue;
+    }
+    if (r.error) {
+      const tile = el('div', 'tile');
+      tile.append(el('div', 'empty', `${r.repo}: ${r.error}`));
+      grid.append(tile);
+      continue;
+    }
+    for (const runner of r.runners) grid.append(renderRunnerTile(r.repo, runner));
+    if (!r.runners.length) {
+      const tile = el('div', 'tile');
+      tile.append(el('div', 'empty', `${r.repo}: no runners registered.`));
+      grid.append(tile);
+    }
+  }
+  group.append(grid);
+  return group;
 }
 
 function el(tag, cls, text) {
@@ -345,12 +419,20 @@ async function load() {
   const btn = document.getElementById('refresh-btn');
   btn.disabled = true;
   try {
-    const results = await Promise.all(WORKFLOWS.map((wf) =>
-      fetchRuns(wf, token).catch((err) => {
-        if (err.auth) throw err;
-        return { error: err.message, runs: [] };
-      })
-    ));
+    const [results, runnerResults] = await Promise.all([
+      Promise.all(WORKFLOWS.map((wf) =>
+        fetchRuns(wf, token).catch((err) => {
+          if (err.auth) throw err;
+          return { error: err.message, runs: [] };
+        })
+      )),
+      Promise.all(RUNNER_REPOS.map((repo) =>
+        fetchRunners(repo, token).catch((err) => {
+          if (err.auth) throw err;
+          return { repo, error: err.message, runners: [] };
+        })
+      )),
+    ]);
 
     const main = document.getElementById('main');
     main.replaceChildren();
@@ -371,6 +453,7 @@ async function load() {
       group.append(grid);
       main.append(group);
     }
+    main.append(renderRunnersSection(runnerResults));
     document.getElementById('last-updated').textContent =
       `Updated ${new Date().toLocaleTimeString()} · PR-triggered runs excluded`;
   } catch (err) {
