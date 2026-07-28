@@ -285,7 +285,9 @@ function renderRunnersSection(results) {
   for (const r of results) {
     if (r.noAccess) {
       const tile = el('div', 'tile');
-      tile.append(el('div', 'row1')).append(el('span', 'name', r.repo));
+      const row = el('div', 'row1');
+      row.append(el('span', 'name', r.repo));
+      tile.append(row);
       tile.append(el('div', 'empty',
         'Token can’t list runners — add the “Administration: Read-only” repository permission to your PAT.'));
       grid.append(tile);
